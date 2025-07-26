@@ -1,12 +1,7 @@
 from fastapi import APIRouter
 from schemas.ingredient_schema import IngredientCreate, IngredientUpdate, IngredientOut
 from typing import List
-from utils.ingredient import (
-    create_ingredient_db,
-    get_ingredients_db,
-    update_ingredient_db,
-    delete_ingredient_db,
-)
+from routes.utils.ingredient import create_ingredient_db, get_ingredients_db, update_ingredient_db, delete_ingredient_db
 
 router = APIRouter()
 

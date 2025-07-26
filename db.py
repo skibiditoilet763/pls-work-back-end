@@ -2,11 +2,16 @@
 import pyodbc
 
 def get_connection():
-    conn = pyodbc.connect(
-        'DRIVER={ODBC Driver 18 for SQL Server};'
-        'SERVER=localhost\\SQLEXPRESS;'
-        'DATABASE=food;'
-        'Trusted_Connection=yes;'
-        'TrustServerCertificate=yes;'
-    )
-    return conn
+    try:
+        conn = pyodbc.connect(
+            'DRIVER={ODBC Driver 17 for SQL Server};'
+            'SERVER=DESKTOP-648G0K0\\SQLEXPRESS01;'
+            'DATABASE=food;'
+            'Trusted_Connection=yes;'
+            'TrustServerCertificate=yes;'
+        )
+        print("✅ Connection successful")
+        return conn
+    except Exception as e:
+        print("❌ Connection failed:", e)
+        raise

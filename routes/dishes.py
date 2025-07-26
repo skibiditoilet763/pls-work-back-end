@@ -3,14 +3,15 @@ from datetime import datetime
 import pyodbc
 import os
 
-router = APIRouter(prefix="/dishes", tags=["Dishes"])
+router = APIRouter(tags=["Dishes"])  # Prefix set in main.py
 
 def get_connection():
     return pyodbc.connect(
-        "Driver={ODBC Driver 17 for SQL Server};"
-        "Server=localhost\\SQLEXPRESS;"
-        "Database=food;"
-        "Trusted_Connection=yes;"
+        'DRIVER={ODBC Driver 18 for SQL Server};'
+        'SERVER=DESKTOP-648G0K0\\SQLEXPRESS01;'
+        'DATABASE=food;'
+        'Trusted_Connection=yes;'
+        'TrustServerCertificate=yes;'
     )
 
 @router.get("/")
@@ -35,21 +36,23 @@ def get_dish(dish_id: int):
     columns = [column[0] for column in cursor.description]
     return dict(zip(columns, row))
 
-@router.post("/")
+@router.post("/dishes")
 def create_dish(
     name: str = Form(...),
-    description: str = Form(...),
+    description: str = Form(""),  # Default to empty string if not provided
     price: float = Form(...),
     category_id: int = Form(...),
-    image: UploadFile = File(...)
+    image: UploadFile = File(None),
+    image_url: str = Form(None)
 ):
-    # Lưu ảnh vào thư mục static/images
-    os.makedirs("static/images", exist_ok=True)
-    path = f"static/images/{image.filename}"
-    with open(path, "wb") as f:
-        f.write(image.file.read())
+    image_url_to_use = image_url if image_url else None
+    if image:
+        os.makedirs("static/images", exist_ok=True)
+        path = f"static/images/{image.filename}"
+        with open(path, "wb") as f:
+            f.write(image.file.read())
+        image_url_to_use = f"http://localhost:8000/{path.replace(os.sep, '/')}"
 
-    image_url = f"http://localhost:8000/{path.replace(os.sep, '/')}"
     now = datetime.now()
 
     conn = get_connection()
@@ -59,40 +62,46 @@ def create_dish(
             DishName, DishImageUrl, DishDescription,
             DishPrice, CategoryId, DishCreatedAt, DishUpdatedAt
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (name, image_url, description, price, category_id, now, now))
+    """, (name, image_url_to_use, description, price, category_id, now, now))
     conn.commit()
+
+    cursor.execute("SELECT @@IDENTITY")
+    dish_id = cursor.fetchone()[0]
+
+    cursor.execute("SELECT * FROM tbl_Dishes WHERE DishId = ?", (dish_id,))
+    row = cursor.fetchone()
     conn.close()
 
-    return {"message": "Dish created successfully", "image_url": image_url}
+    columns = [column[0] for column in cursor.description]
+    return dict(zip(columns, row))
 
-@router.put("/{dish_id}")
+@router.put("/dishes/{dish_id}")
 def update_dish(
     dish_id: int,
     name: str = Form(...),
-    description: str = Form(...),
+    description: str = Form(""),  # Default to empty string if not provided
     price: float = Form(...),
     category_id: int = Form(...),
-    image: UploadFile = File(None)
+    image: UploadFile = File(None),
+    image_url: str = Form(None)
 ):
-    # Nếu có ảnh mới thì lưu lại
+    image_url_to_use = image_url if image_url else None
     if image:
         os.makedirs("static/images", exist_ok=True)
         path = f"static/images/{image.filename}"
         with open(path, "wb") as f:
             f.write(image.file.read())
-        image_url = f"http://localhost:8000/{path.replace(os.sep, '/')}"
-    else:
-        image_url = None
+        image_url_to_use = f"http://localhost:8000/{path.replace(os.sep, '/')}"
 
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Nếu không có ảnh mới thì lấy ảnh cũ
-    if not image_url:
+    # Always check for existing image URL if none provided
+    if not image_url_to_use and not image:
         cursor.execute("SELECT DishImageUrl FROM tbl_Dishes WHERE DishId = ?", (dish_id,))
         row = cursor.fetchone()
         if row:
-            image_url = row[0]
+            image_url_to_use = row[0]
 
     cursor.execute("""
         UPDATE tbl_Dishes SET
@@ -103,13 +112,13 @@ def update_dish(
             CategoryId = ?,
             DishUpdatedAt = ?
         WHERE DishId = ?
-    """, (name, image_url, description, price, category_id, datetime.now(), dish_id))
+    """, (name, image_url_to_use, description, price, category_id, datetime.now(), dish_id))
     conn.commit()
     conn.close()
 
-    return {"message": "Dish updated successfully", "image_url": image_url}
+    return {"message": "Dish updated successfully", "image_url": image_url_to_use}
 
-@router.delete("/{dish_id}")
+@router.delete("/dishes/{dish_id}")
 def delete_dish(dish_id: int):
     conn = get_connection()
     cursor = conn.cursor()

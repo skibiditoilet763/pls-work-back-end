@@ -1,21 +1,33 @@
 from pydantic import BaseModel
+from typing import Optional
 
-# Dùng cho tạo tài khoản (đăng ký)
+
 class AccountCreate(BaseModel):
     username: str
     password: str
-    role: str  # nếu có role, không có thì có thể bỏ đi
+    email: str
+    phone: Optional[str] = None
+    address: Optional[str] = None
 
-# Dùng cho đăng nhập
+
 class AccountLogin(BaseModel):
     username: str
     password: str
 
-# Dùng cho phản hồi ra bên ngoài (nếu cần)
-class AccountOut(BaseModel):
+
+class AccountUpdate(BaseModel):
+    email: Optional[str] = None
+    password: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+
+
+class AccountResponse(BaseModel):
     id: int
     username: str
-    role: str
+    email: str
+    phone: Optional[str] = None
+    address: Optional[str] = None
 
     class Config:
         orm_mode = True
