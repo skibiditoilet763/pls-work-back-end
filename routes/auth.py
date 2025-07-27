@@ -1,154 +1,152 @@
+
 from fastapi import APIRouter, HTTPException
 from schemas.account_schema import AccountCreate, AccountLogin, AccountResponse, AccountUpdate
-from routes.utils.auth import hash_password
-import pyodbc
+from routes.utils.account import update_account
+from passlib.hash import bcrypt
+from db import conn
 
-router = APIRouter(tags=["Auth"])
-
-def get_connection():
-    conn_str = (
-        "Driver={ODBC Driver 17 for SQL Server};"
-        "Server=DESKTOP-648G0K0\\SQLEXPRESS01;"
-        "Database=food;"
-        "Trusted_Connection=yes;"
-    )
-    return pyodbc.connect(conn_str)
+router = APIRouter()
 
 @router.post("/register", response_model=AccountResponse)
 def register(data: AccountCreate):
-    conn = get_connection()
     cursor = conn.cursor()
+    try:
+        hashed_password = bcrypt.hash(data.AccountPassword)
+        cursor.execute(
+            """
+            INSERT INTO tbl_Accounts (AccountUsername, AccountPassword, AccountRole, PhoneNumber, Address)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (data.AccountUsername, hashed_password, data.AccountRole, data.PhoneNumber, data.Address)
+        )
+        conn.commit()
+        cursor.execute("SELECT @@IDENTITY AS id")
+        account_id = cursor.fetchone()[0]
+        cursor.execute(
+            "SELECT AccountId, AccountUsername, AccountRole, PhoneNumber, Address FROM tbl_Accounts WHERE AccountId = ?",
+            (account_id,)
+        )
+        row = cursor.fetchone()
+        if row:
+            # Explicitly cast PhoneNumber to string to match schema
+            return {
+                "AccountId": row[0],
+                "AccountUsername": row[1],
+                "AccountRole": row[2],
+                "PhoneNumber": str(row[3]) if row[3] is not None else None,
+                "Address": row[4]
+            }
+        raise HTTPException(status_code=500, detail="Failed to create user")
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
+    finally:
+        cursor.close()
 
-    cursor.execute("SELECT * FROM tbl_Accounts WHERE AccountUsername = ?", (data.username,))
-    if cursor.fetchone():
-        conn.close()
-        raise HTTPException(status_code=400, detail="Username already exists")
-
-    hashed_password = hash_password(data.password)
-    cursor.execute(
-        """
-        INSERT INTO tbl_Accounts (AccountUsername, AccountPassword, AccountRole, Name, Address, PhoneNumber)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (data.username, hashed_password, data.role, data.name, data.address, data.phoneNumber)
-    )
-    conn.commit()
-
-    cursor.execute("SELECT @@IDENTITY")
-    account_id = cursor.fetchone()[0]
-    cursor.execute(
-        """
-        SELECT AccountId, AccountUsername, AccountRole, Name, Address, PhoneNumber
-        FROM tbl_Accounts
-        WHERE AccountId = ?
-        """,
-        (account_id,)
-    )
-    user = cursor.fetchone()
-    conn.close()
-
-    return AccountResponse(
-        id=user[0],
-        username=user[1],
-        role=user[2],
-        name=user[3],
-        address=user[4],
-        phoneNumber=user[5]
-    )
-
-@router.post("/login", response_model=AccountResponse)
+@router.post("/login")
 def login(data: AccountLogin):
-    hashed_password = hash_password(data.password)
-    conn = get_connection()
     cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        SELECT AccountId, AccountUsername, AccountRole, Name, Address, PhoneNumber
-        FROM tbl_Accounts
-        WHERE AccountUsername = ? AND AccountPassword = ?
-        """,
-        (data.username, hashed_password)
-    )
-    user = cursor.fetchone()
-    conn.close()
-
-    if not user:
+    try:
+        cursor.execute(
+            "SELECT AccountPassword FROM tbl_Accounts WHERE AccountUsername = ?",
+            (data.AccountUsername,)
+        )
+        row = cursor.fetchone()
+        if row and bcrypt.verify(data.AccountPassword, row[0]):
+            cursor.execute(
+                "SELECT AccountId, AccountUsername, AccountRole, PhoneNumber, Address FROM tbl_Accounts WHERE AccountUsername = ?",
+                (data.AccountUsername,)
+            )
+            user_row = cursor.fetchone()
+            if user_row:
+                # Explicitly cast PhoneNumber to string to match schema
+                return {
+                    "AccountId": user_row[0],
+                    "AccountUsername": user_row[1],
+                    "AccountRole": user_row[2],
+                    "PhoneNumber": str(user_row[3]) if user_row[3] is not None else None,
+                    "Address": user_row[4]
+                }
         raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    return AccountResponse(
-        id=user[0],
-        username=user[1],
-        role=user[2],
-        name=user[3],
-        address=user[4],
-        phoneNumber=user[5]
-    )
-
+    finally:
+        cursor.close()
 @router.get("/profile/{account_id}", response_model=AccountResponse)
 def get_profile(account_id: int):
-    conn = get_connection()
     cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        SELECT AccountId, AccountUsername, AccountRole, Name, Address, PhoneNumber
-        FROM tbl_Accounts
-        WHERE AccountId = ?
-        """,
-        (account_id,)
-    )
-    user = cursor.fetchone()
-    conn.close()
-
-    if not user:
+    try:
+        cursor.execute(
+            "SELECT AccountId, AccountUsername, AccountRole, PhoneNumber, Address FROM tbl_Accounts WHERE AccountId = ?",
+            (account_id,)
+        )
+        row = cursor.fetchone()
+        if row:
+            return {
+                "AccountId": row[0],
+                "AccountUsername": row[1],
+                "AccountRole": row[2],
+                "PhoneNumber": str(row[3]) if row[3] is not None else None,
+                "Address": row[4]
+            }
         raise HTTPException(status_code=404, detail="User not found")
+    finally:
+        cursor.close()
+        
+        
+        
+@router.put("/update/{account_id}")
+def update_user(account_id: int, data: AccountUpdate):
+    try:
+        updated_data = update_account(account_id, data)
+        if updated_data is None:
+            raise HTTPException(status_code=404, detail="User not found or no updates applied")
+        # Ensure PhoneNumber is a string to match AccountResponse schema
+        updated_data["PhoneNumber"] = str(updated_data["PhoneNumber"]) if updated_data["PhoneNumber"] is not None else None
+        return updated_data
+    except HTTPException as http_exc:
+        raise http_exc
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
 
-    return AccountResponse(
-        id=user[0],
-        username=user[1],
-        role=user[2],
-        name=user[3],
-        address=user[4],
-        phoneNumber=user[5]
-    )
 
-@router.put("/profile/{account_id}", response_model=AccountResponse)
-def update_profile(account_id: int, data: AccountUpdate):
-    conn = get_connection()
+
+
+@router.delete("/delete")
+def delete_user(account_id: int):
     cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM tbl_Accounts WHERE AccountId = ?", (account_id,))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="User not found")
+        conn.commit()
+        return {"message": "User deleted successfully"}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete user: {str(e)}")
+    finally:
+        cursor.close()
+        
+        
+        
+#admin shit:
+from typing import List
 
-    hashed_password = hash_password(data.password)
-
-    cursor.execute(
-        """
-        UPDATE tbl_Accounts
-        SET Name = ?, AccountPassword = ?, Address = ?, PhoneNumber = ?
-        WHERE AccountId = ?
-        """,
-        (data.name, hashed_password, data.address, data.phoneNumber, account_id)
-    )
-    conn.commit()
-
-    cursor.execute(
-        """
-        SELECT AccountId, AccountUsername, AccountRole, Name, Address, PhoneNumber
-        FROM tbl_Accounts
-        WHERE AccountId = ?
-        """,
-        (account_id,)
-    )
-    user = cursor.fetchone()
-    conn.close()
-
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    return AccountResponse(
-        id=user[0],
-        username=user[1],
-        role=user[2],
-        name=user[3],
-        address=user[4],
-        phoneNumber=user[5]
-    )
+@router.get("/users", response_model=List[AccountResponse])
+def get_users():
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT AccountId, AccountUsername, AccountRole, PhoneNumber, Address FROM tbl_Accounts"
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "AccountId": row[0],
+                "AccountUsername": row[1],
+                "AccountRole": row[2],
+                "PhoneNumber": str(row[3]) if row[3] is not None else None,
+                "Address": row[4]
+            }
+            for row in rows
+        ]
+    finally:
+        cursor.close()
